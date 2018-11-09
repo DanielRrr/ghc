@@ -1708,7 +1708,7 @@ kcLHsQTyVarBndrs cusk open_fam skol_info (L _ hs_tv : hs_tvs) thing
       -- Special handling for the case where the binder is already in scope
       -- See Note [Associated type tyvar names] in Class and
       --     Note [TyVar binders for associated decls] in HsDecls
-    kc_hs_tv (UserTyVar _ (L _ name))
+    kc_hs_tv (UserTyVar _ (L _ name) _)
       = do { mb_tv <- tcLookupLcl_maybe name
            ; case mb_tv of  -- See Note [TyVar binders for associated decls]
                 Just (ATyVar _ tv) -> return (tv, True)
@@ -1721,7 +1721,7 @@ kcLHsQTyVarBndrs cusk open_fam skol_info (L _ hs_tv : hs_tvs) thing
                         ; tv <- new_tv name kind
                         ; return (tv, False) } }
 
-    kc_hs_tv (KindedTyVar _ lname@(L _ name) lhs_kind)
+    kc_hs_tv (KindedTyVar _ lname@(L _ name) lhs_kind _)
       = do { kind <- tcLHsKindSig (TyVarBndrKindCtxt name) lhs_kind
            ; mb_tv <- tcLookupLcl_maybe name
            ; case mb_tv of
@@ -1963,12 +1963,12 @@ tcHsTyVarBndr :: (Name -> Kind -> TcM TyVar)
 -- with a mutable kind in it.
 --
 -- Returned TcTyVar has the same name; no cloning
-tcHsTyVarBndr new_tv (UserTyVar _ (L _ tv_nm))
+tcHsTyVarBndr new_tv (UserTyVar _ (L _ tv_nm) _)
   = newFlexiKindedTyVar new_tv tv_nm
-tcHsTyVarBndr new_tv (KindedTyVar _ (L _ tv_nm) lhs_kind)
+tcHsTyVarBndr new_tv (KindedTyVar _ (L _ tv_nm) lhs_kind _)
   = do { kind <- tcLHsKindSig (TyVarBndrKindCtxt tv_nm) lhs_kind
        ; new_tv tv_nm kind }
-tcHsTyVarBndr _ (XTyVarBndr _) = panic "tcHsTyVarBndr"
+tcHsTyVarBndr _ (XTyVarBndr _ _) = panic "tcHsTyVarBndr"
 
 -----------------
 newWildTyVar :: Name -> TcM TcTyVar
