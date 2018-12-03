@@ -75,13 +75,18 @@ testRules = do
             setEnv "CHECK_API_ANNOTATIONS" annotationsPath
 
         -- Execute the test target.
-        buildWithCmdOptions env $ target (vanillaContext Stage2 compiler) RunTest [] []
+        -- We override the verbosity setting to make sure the user can see
+        -- the test output: https://ghc.haskell.org/trac/ghc/ticket/15951.
+        withVerbosity Loud $ buildWithCmdOptions env $
+            target (vanillaContext Stage2 compiler) RunTest [] []
 
 -- | Build extra programs and libraries required by testsuite
 needTestsuitePackages :: Action ()
 needTestsuitePackages = do
     targets   <- mapM (needFile Stage1) =<< testsuitePackages
-    needIservBins
+    -- iserv is not supported under Windows
+    windows <- windowsHost
+    when (not windows) needIservBins
     need targets
 
 -- | Build the timeout program.
@@ -104,9 +109,13 @@ timeoutProgBuilder = do
             makeExecutable (root -/- timeoutPath)
 
 needIservBins :: Action ()
-needIservBins =
+needIservBins = do
+    rtsways <- interpretInContext (vanillaContext Stage1 ghc) getRtsWays
     need =<< traverse programPath
-      [ Context Stage1 iserv w | w <- [vanilla, profiling] ]
+               [ Context Stage1 iserv w
+               | w <- [vanilla, profiling, dynamic]
+               , w `elem` rtsways
+               ]
 
 needTestBuilders :: Action ()
 needTestBuilders = do

@@ -55,13 +55,13 @@ module TyCoRep (
         delBinderVar,
         isInvisibleArgFlag, isVisibleArgFlag,
         isInvisibleBinder, isVisibleBinder,
-        isTyBinder,
+        isTyBinder, isNamedBinder,
 
         -- * Functions over coercions
         pickLR,
 
         -- * Pretty-printing
-        pprType, pprParendType, pprPrecType,
+        pprType, pprParendType, pprPrecType, pprPrecTypeX,
         pprTypeApp, pprTCvBndr, pprTCvBndrs,
         pprSigmaType,
         pprTheta, pprParendTheta, pprForAll, pprUserForAll,
@@ -69,7 +69,7 @@ module TyCoRep (
         pprThetaArrowTy, pprClassPred,
         pprKind, pprParendKind, pprTyLit,
         PprPrec(..), topPrec, sigPrec, opPrec, funPrec, appPrec, maybeParen,
-        pprDataCons, ppSuggestExplicitKinds,
+        pprDataCons, pprWithExplicitKindsWhen,
 
         pprCo, pprParendCo,
 
@@ -77,7 +77,8 @@ module TyCoRep (
 
         -- * Free variables
         tyCoVarsOfType, tyCoVarsOfTypeDSet, tyCoVarsOfTypes, tyCoVarsOfTypesDSet,
-        tyCoFVsBndr, tyCoFVsOfType, tyCoVarsOfTypeList,
+        tyCoFVsBndr, tyCoFVsVarBndr, tyCoFVsVarBndrs,
+        tyCoFVsOfType, tyCoVarsOfTypeList,
         tyCoFVsOfTypes, tyCoVarsOfTypesList,
         coVarsOfType, coVarsOfTypes,
         coVarsOfCo, coVarsOfCos,
@@ -133,7 +134,7 @@ module TyCoRep (
         tidyType,      tidyTypes,
         tidyOpenType,  tidyOpenTypes,
         tidyOpenKind,
-        tidyVarBndr, tidyVarBndrs, tidyFreeTyCoVars,
+        tidyVarBndr, tidyVarBndrs, tidyFreeTyCoVars, avoidNameClashes,
         tidyOpenTyCoVar, tidyOpenTyCoVars,
         tidyTyCoVarOcc,
         tidyTopType,
@@ -541,6 +542,10 @@ isInvisibleBinder (Anon ty)            = isPredTy ty
 isVisibleBinder :: TyCoBinder -> Bool
 isVisibleBinder = not . isInvisibleBinder
 
+isNamedBinder :: TyCoBinder -> Bool
+isNamedBinder (Named {}) = True
+isNamedBinder (Anon {})  = False
+
 -- | If its a named binder, is the binder a tyvar?
 -- Returns True for nondependent binder.
 isTyBinder :: TyCoBinder -> Bool
@@ -711,7 +716,7 @@ See also Note [Required, Specified, and Inferred for types] in TcTyClsDecls
   Visible Type Applications paper (ESOP'16).
 
 Note [No Required TyCoBinder in terms]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 We don't allow Required foralls for term variables, including pattern
 synonyms and data constructors.  Why?  Because then an application
 would need a /compulsory/ type argument (possibly without an "@"?),
@@ -719,6 +724,9 @@ thus (f Int); and we don't have concrete syntax for that.
 
 We could change this decision, but Required, Named TyCoBinders are rare
 anyway.  (Most are Anons.)
+
+However the type of a term can (just about) have a required quantifier;
+see Note [Required quantifiers in the type of a term] in TcExpr.
 -}
 
 
@@ -1854,8 +1862,15 @@ tyCoFVsOfType (CoercionTy co)    f bound_vars acc = tyCoFVsOfCo co f bound_vars 
 
 tyCoFVsBndr :: TyCoVarBinder -> FV -> FV
 -- Free vars of (forall b. <thing with fvs>)
-tyCoFVsBndr (Bndr tv _) fvs = (delFV tv fvs)
-                              `unionFV` tyCoFVsOfType (varType tv)
+tyCoFVsBndr (Bndr tv _) fvs = tyCoFVsVarBndr tv fvs
+
+tyCoFVsVarBndrs :: [Var] -> FV -> FV
+tyCoFVsVarBndrs vars fvs = foldr tyCoFVsVarBndr fvs vars
+
+tyCoFVsVarBndr :: Var -> FV -> FV
+tyCoFVsVarBndr var fvs
+  = tyCoFVsOfType (varType var)   -- Free vars of its type/kind
+    `unionFV` delFV var fvs       -- Delete it from the thing-inside
 
 tyCoFVsOfTypes :: [Type] -> FV
 -- See Note [Free variables of types]
@@ -1891,7 +1906,7 @@ tyCoFVsOfCo (TyConAppCo _ _ cos) fv_cand in_scope acc = tyCoFVsOfCos cos fv_cand
 tyCoFVsOfCo (AppCo co arg) fv_cand in_scope acc
   = (tyCoFVsOfCo co `unionFV` tyCoFVsOfCo arg) fv_cand in_scope acc
 tyCoFVsOfCo (ForAllCo tv kind_co co) fv_cand in_scope acc
-  = (delFV tv (tyCoFVsOfCo co) `unionFV` tyCoFVsOfCo kind_co) fv_cand in_scope acc
+  = (tyCoFVsVarBndr tv (tyCoFVsOfCo co) `unionFV` tyCoFVsOfCo kind_co) fv_cand in_scope acc
 tyCoFVsOfCo (FunCo _ co1 co2)    fv_cand in_scope acc
   = (tyCoFVsOfCo co1 `unionFV` tyCoFVsOfCo co2) fv_cand in_scope acc
 tyCoFVsOfCo (CoVarCo v) fv_cand in_scope acc
@@ -3119,11 +3134,14 @@ pprType       = pprPrecType topPrec
 pprParendType = pprPrecType appPrec
 
 pprPrecType :: PprPrec -> Type -> SDoc
-pprPrecType prec ty
+pprPrecType = pprPrecTypeX emptyTidyEnv
+
+pprPrecTypeX :: TidyEnv -> PprPrec -> Type -> SDoc
+pprPrecTypeX env prec ty
   = getPprStyle $ \sty ->
-    if debugStyle sty           -- Use pprDebugType when in
+    if debugStyle sty           -- Use debugPprType when in
     then debug_ppr_ty prec ty   -- when in debug-style
-    else pprPrecIfaceType prec (tidyToIfaceTypeSty ty sty)
+    else pprPrecIfaceType prec (tidyToIfaceTypeStyX env ty sty)
 
 pprTyLit :: TyLit -> SDoc
 pprTyLit = pprIfaceTyLit . toIfaceTyLit
@@ -3132,22 +3150,25 @@ pprKind, pprParendKind :: Kind -> SDoc
 pprKind       = pprType
 pprParendKind = pprParendType
 
-tidyToIfaceTypeSty :: Type -> PprStyle -> IfaceType
-tidyToIfaceTypeSty ty sty
-  | userStyle sty = tidyToIfaceType ty
+tidyToIfaceTypeStyX :: TidyEnv -> Type -> PprStyle -> IfaceType
+tidyToIfaceTypeStyX env ty sty
+  | userStyle sty = tidyToIfaceTypeX env ty
   | otherwise     = toIfaceTypeX (tyCoVarsOfType ty) ty
      -- in latter case, don't tidy, as we'll be printing uniques.
 
 tidyToIfaceType :: Type -> IfaceType
+tidyToIfaceType = tidyToIfaceTypeX emptyTidyEnv
+
+tidyToIfaceTypeX :: TidyEnv -> Type -> IfaceType
 -- It's vital to tidy before converting to an IfaceType
 -- or nested binders will become indistinguishable!
 --
 -- Also for the free type variables, tell toIfaceTypeX to
 -- leave them as IfaceFreeTyVar.  This is super-important
 -- for debug printing.
-tidyToIfaceType ty = toIfaceTypeX (mkVarSet free_tcvs) (tidyType env ty)
+tidyToIfaceTypeX env ty = toIfaceTypeX (mkVarSet free_tcvs) (tidyType env' ty)
   where
-    env       = tidyFreeTyCoVars emptyTidyEnv free_tcvs
+    env'      = tidyFreeTyCoVars env free_tcvs
     free_tcvs = tyCoVarsOfTypeWellScoped ty
 
 ------------
@@ -3172,7 +3193,6 @@ tidyToIfaceCo co = toIfaceCoercionX (mkVarSet free_tcvs) (tidyCo env co)
   where
     env       = tidyFreeTyCoVars emptyTidyEnv free_tcvs
     free_tcvs = scopedSort $ tyCoVarsOfCoList co
-
 ------------
 pprClassPred :: Class -> [Type] -> SDoc
 pprClassPred clas tys = pprTypeApp (classTyCon clas) tys
@@ -3260,9 +3280,10 @@ debug_ppr_ty prec (TyConApp tc tys)
   | otherwise = maybeParen prec appPrec $
                 hang (ppr tc) 2 (sep (map (debug_ppr_ty appPrec) tys))
 
-debug_ppr_ty prec (AppTy t1 t2)
-  = hang (debug_ppr_ty prec t1)
-       2 (debug_ppr_ty appPrec t2)
+debug_ppr_ty _ (AppTy t1 t2)
+  = hang (debug_ppr_ty appPrec t1)  -- Print parens so we see ((a b) c)
+       2 (debug_ppr_ty appPrec t2)  -- so that we can distinguish
+                                    -- TyConApp from AppTy
 
 debug_ppr_ty prec (CastTy ty co)
   = maybeParen prec topPrec $
@@ -3347,13 +3368,14 @@ pprTypeApp tc tys
     -- TODO: toIfaceTcArgs seems rather wasteful here
 
 ------------------
-ppSuggestExplicitKinds :: SDoc
--- Print a helpful suggstion about -fprint-explicit-kinds,
--- if it is not already on
-ppSuggestExplicitKinds
-  = sdocWithDynFlags $ \ dflags ->
-    ppUnless (gopt Opt_PrintExplicitKinds dflags) $
-    text "Use -fprint-explicit-kinds to see the kind arguments"
+-- | Display all kind information (with @-fprint-explicit-kinds@) when the
+-- provided 'Bool' argument is 'True'.
+-- See @Note [Kind arguments in error messages]@ in "TcErrors".
+pprWithExplicitKindsWhen :: Bool -> SDoc -> SDoc
+pprWithExplicitKindsWhen b
+  = updSDocDynFlags $ \dflags ->
+      if b then gopt_set dflags Opt_PrintExplicitKinds
+           else dflags
 
 {-
 %************************************************************************
@@ -3368,15 +3390,8 @@ ppSuggestExplicitKinds
 --
 -- It doesn't change the uniques at all, just the print names.
 tidyVarBndrs :: TidyEnv -> [TyCoVar] -> (TidyEnv, [TyCoVar])
-tidyVarBndrs (occ_env, subst) tvs
-    = mapAccumL tidyVarBndr tidy_env' tvs
-  where
-    -- Seed the occ_env with clashes among the names, see
-    -- Node [Tidying multiple names at once] in OccName
-    -- Se still go through tidyVarBndr so that each kind variable is tidied
-    -- with the correct tidy_env
-    occs = map getHelpfulOccName tvs
-    tidy_env' = (avoidClashesOccEnv occ_env occs, subst)
+tidyVarBndrs tidy_env tvs
+  = mapAccumL tidyVarBndr (avoidNameClashes tvs tidy_env) tvs
 
 tidyVarBndr :: TidyEnv -> TyCoVar -> (TidyEnv, TyCoVar)
 tidyVarBndr tidy_env@(occ_env, subst) var
@@ -3389,21 +3404,28 @@ tidyVarBndr tidy_env@(occ_env, subst) var
           name'  = tidyNameOcc name occ'
           name   = varName var
 
-getHelpfulOccName :: TyCoVar -> OccName
-getHelpfulOccName var = occ1
+avoidNameClashes :: [TyCoVar] -> TidyEnv -> TidyEnv
+-- Seed the occ_env with clashes among the names, see
+-- Node [Tidying multiple names at once] in OccName
+avoidNameClashes tvs (occ_env, subst)
+  = (avoidClashesOccEnv occ_env occs, subst)
   where
-    name = varName var
-    occ  = getOccName name
-    -- A TcTyVar with a System Name is probably a unification variable;
-    -- when we tidy them we give them a trailing "0" (or 1 etc)
-    -- so that they don't take precedence for the un-modified name
-    -- Plus, indicating a unification variable in this way is a
-    -- helpful clue for users
-    occ1 | isSystemName name
-         , isTcTyVar var
-         = mkTyVarOcc (occNameString occ ++ "0")
-         | otherwise
-         = occ
+    occs = map getHelpfulOccName tvs
+
+getHelpfulOccName :: TyCoVar -> OccName
+-- A TcTyVar with a System Name is probably a
+-- unification variable; when we tidy them we give them a trailing
+-- "0" (or 1 etc) so that they don't take precedence for the
+-- un-modified name. Plus, indicating a unification variable in
+-- this way is a helpful clue for users
+getHelpfulOccName tv
+  | isSystemName name, isTcTyVar tv
+  = mkTyVarOcc (occNameString occ ++ "0")
+  | otherwise
+  = occ
+  where
+   name = varName tv
+   occ  = getOccName name
 
 tidyTyCoVarBinder :: TidyEnv -> VarBndr TyCoVar vis
                   -> (TidyEnv, VarBndr TyCoVar vis)

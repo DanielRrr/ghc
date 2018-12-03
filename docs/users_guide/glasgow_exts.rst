@@ -743,7 +743,7 @@ follows:
       view pattern expression are in scope. For example: ::
 
           example :: Maybe ((String -> Integer,Integer), String) -> Bool
-          example Just ((f,_), f -> 4) = True
+          example (Just ((f,_), f -> 4)) = True
 
       Additionally, in function definitions, variables bound by matching
       earlier curried arguments may be used in view pattern expressions
@@ -7577,9 +7577,9 @@ the left hand side can be explicitly bound. For example: ::
   
     data instance forall a (b :: Proxy a). F (Proxy b) = FProxy Bool
 
-When an explicit ``forall`` is present, all *type* variables mentioned must
-be bound by the ``forall``. Kind variables will be implicitly bound if
-necessary, for example: ::
+When an explicit ``forall`` is present, all *type* variables mentioned which
+are not already in scope must be bound by the ``forall``. Kind variables will
+be implicitly bound if necessary, for example: ::
   
     data instance forall (a :: k). F a = FOtherwise
 
@@ -11898,7 +11898,7 @@ fixing the hole, this can help users understand what options they have.
 
 .. ghc-flag:: -fabstract-refinement-hole-fits
     :shortdesc: *default: off.* Toggles whether refinements where one or more
-         or more of the holes are abstract are reported.
+         of the holes are abstract are reported.
     :type: dynamic
     :reverse: -fno-abstract-refinement-hole-fits
     :category: verbosity

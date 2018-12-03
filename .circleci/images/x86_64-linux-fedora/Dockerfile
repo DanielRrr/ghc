@@ -5,8 +5,9 @@ ENV LANG C.UTF-8
 # Core build utilities
 RUN dnf -y install coreutils binutils which git make \
     automake autoconf gcc perl python3 texinfo xz lbzip2 \
-    patch openssh-clients sudo curl zlib-devel sqlite \
-    ncurses-compat-libs gmp-devel ncurses-devel gcc-c++ findutils
+    patch openssh-clients sudo zlib-devel sqlite \
+    ncurses-compat-libs gmp-devel ncurses-devel gcc-c++ findutils \
+    curl wget jq
 
 # Documentation tools
 RUN dnf -y install python3-sphinx \
@@ -42,8 +43,8 @@ USER ghc
 WORKDIR /home/ghc/
 
 # Install Alex, Happy, and HsColor with Cabal
-RUN cabal update
-RUN cabal install alex happy hscolour
+RUN cabal update && \
+    cabal install hscolour happy alex
 ENV PATH /home/ghc/.cabal/bin:$PATH
 
 CMD ["bash"]
