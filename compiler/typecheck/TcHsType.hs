@@ -1656,8 +1656,84 @@ kcLHsQTyVars_NonCusk name flav
        | otherwise
        = mkAnonTyConBinder tv
 
+<<<<<<< HEAD
+kcLHsQTyVars _ _ _ (XLHsQTyVars _) _ = panic "kcLHsQTyVars"
+
+kcLHsQTyVarBndrs :: Bool   -- True <=> bump the TcLevel when bringing vars into scope
+                 -> Bool   -- True <=> Default un-annotated tyvar
+                           --          binders to kind *
+                 -> SkolemInfo
+                 -> [LHsTyVarBndr GhcRn]
+                 -> TcM r
+                 -> TcM ([TyVar], r)
+-- There may be dependency between the explicit "ty" vars.
+-- So, we have to handle them one at a time.
+kcLHsQTyVarBndrs _ _ _ [] thing
+  = do { stuff <- thing; return ([], stuff) }
+
+kcLHsQTyVarBndrs cusk open_fam skol_info (L _ hs_tv : hs_tvs) thing
+  = do { tv_pair@(tv, _) <- kc_hs_tv hs_tv
+               -- NB: Bring all tvs into scope, even non-dependent ones,
+               -- as they're needed in type synonyms, data constructors, etc.
+
+       ; (tvs, stuff) <- bind_unless_scoped tv_pair $
+                         kcLHsQTyVarBndrs cusk open_fam skol_info hs_tvs $
+                         thing
+
+       ; return ( tv : tvs, stuff ) }
+  where
+    -- | Bind the tyvar in the env't unless the bool is True
+    bind_unless_scoped :: (TcTyVar, Bool) -> TcM a -> TcM a
+    bind_unless_scoped (_, True)   thing_inside = thing_inside
+    bind_unless_scoped (tv, False) thing_inside
+      | cusk      = scopeTyVars skol_info [tv] thing_inside
+      | otherwise = tcExtendTyVarEnv      [tv] thing_inside
+         -- These variables haven't settled down yet, so we don't want to bump
+         -- the TcLevel. If we do, then we'll have metavars of too high a level
+         -- floating about. Changing this causes many, many failures in the
+         -- `dependent` testsuite directory.
+
+    kc_hs_tv :: HsTyVarBndr GhcRn -> TcM (TcTyVar, Bool)
+      -- Special handling for the case where the binder is already in scope
+      -- See Note [Associated type tyvar names] in Class and
+      --     Note [TyVar binders for associated decls] in HsDecls
+    kc_hs_tv (UserTyVar _ (L _ name) _)
+      = do { mb_tv <- tcLookupLcl_maybe name
+           ; case mb_tv of  -- See Note [TyVar binders for associated decls]
+                Just (ATyVar _ tv) -> return (tv, True)
+                _ -> do { kind <- if open_fam
+                                  then return liftedTypeKind
+                                  else newMetaKindVar
+                                  -- Open type/data families default their variables
+                                  -- variables to kind *.  But don't default in-scope
+                                  -- class tyvars, of course
+                        ; tv <- new_tv name kind
+                        ; return (tv, False) } }
+
+    kc_hs_tv (KindedTyVar _ lname@(L _ name) lhs_kind _)
+      = do { kind <- tcLHsKindSig (TyVarBndrKindCtxt name) lhs_kind
+           ; mb_tv <- tcLookupLcl_maybe name
+           ; case mb_tv of
+               Just (ATyVar _ tv)
+                 -> do { discardResult $
+                           unifyKind (Just (HsTyVar noExt NotPromoted lname))
+                                     kind (tyVarKind tv)
+                       ; return (tv, True) }
+               _ -> do { tv <- new_tv name kind
+                       ; return (tv, False) } }
+
+    kc_hs_tv (XTyVarBndr{}) = panic "kc_hs_tv"
+
+
+    new_tv :: Name -> Kind -> TcM TcTyVar
+    new_tv
+      | cusk      = newSkolemTyVar
+      | otherwise = newTyVarTyVar
+          -- Third wrinkle in Note [Kind generalisation and TyVarTvs]
+=======
 kcLHsQTyVars_NonCusk _ _ (XLHsQTyVars _) _ = panic "kcLHsQTyVars"
 
+>>>>>>> master
 
 {- Note [Kind-checking tyvar binders for associated types]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1848,13 +1924,13 @@ bindExplicitTKBndrsX tc_tv hs_tvs thing_inside
 tcHsTyVarBndr :: (Name -> Kind -> TcM TyVar)
               -> HsTyVarBndr GhcRn -> TcM TcTyVar
 -- Returned TcTyVar has the same name; no cloning
-tcHsTyVarBndr new_tv (UserTyVar _ (L _ tv_nm))
+tcHsTyVarBndr new_tv (UserTyVar _ (L _ tv_nm) _)
   = do { kind <- newMetaKindVar
        ; new_tv tv_nm kind }
-tcHsTyVarBndr new_tv (KindedTyVar _ (L _ tv_nm) lhs_kind)
+tcHsTyVarBndr new_tv (KindedTyVar _ (L _ tv_nm) lhs_kind _)
   = do { kind <- tcLHsKindSig (TyVarBndrKindCtxt tv_nm) lhs_kind
        ; new_tv tv_nm kind }
-tcHsTyVarBndr _ (XTyVarBndr _) = panic "tcHsTyVarBndr"
+tcHsTyVarBndr _ (XTyVarBndr _ _) = panic "tcHsTyVarBndr"
 
 -----------------
 tcHsQTyVarBndr :: ContextKind

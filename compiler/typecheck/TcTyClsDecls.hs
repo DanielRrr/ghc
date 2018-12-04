@@ -973,8 +973,8 @@ getFamDeclInitialKind mb_parent_tycon
                      , fdInfo      = info })
   = kcLHsQTyVars name flav cusk ktvs $
     case resultSig of
-      KindSig _ ki                              -> tcLHsKindSig ctxt ki
-      TyVarSig _ (dL->L _ (KindedTyVar _ _ ki)) -> tcLHsKindSig ctxt ki
+      KindSig _ ki                          -> tcLHsKindSig ctxt ki
+      TyVarSig _ (dL->L _ (KindedTyVar _ _ ki _)) -> tcLHsKindSig ctxt ki
       _ -- open type families have * return kind by default
         | tcFlavourIsOpen flav              -> return liftedTypeKind
                -- closed type families have their return kind inferred

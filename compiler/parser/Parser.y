@@ -91,7 +91,7 @@ import GhcPrelude
 import qualified GHC.LanguageExtensions as LangExt
 }
 
-%expect 236 -- shift/reduce conflicts
+%expect 258 -- shift/reduce conflicts
 
 {- Last updated: 04 June 2018
 
@@ -1069,7 +1069,7 @@ topdecl :: { LHsDecl GhcPs }
 --
 cl_decl :: { LTyClDecl GhcPs }
         : 'class' tycl_hdr fds where_cls
-                {% amms (mkClassDecl (comb4 $1 $2 $3 $4) $2 $3 (snd $ unLoc $4))
+                {% amms (mkClassDecl (comb4 $1 $2 $3 $4) $2 $3 (snd $ unLoc $4) braces)
                         (mj AnnClass $1:(fst $ unLoc $3)++(fst $ unLoc $4)) }
 
 -- Type declarations (toplevel)
@@ -1084,7 +1084,7 @@ ty_decl :: { LTyClDecl GhcPs }
                 --
                 -- Note the use of type for the head; this allows
                 -- infix type constructors to be declared
-                {% amms (mkTySynonym (comb2 $1 $4) $2 $4)
+                {% amms (mkTySynonym (comb2 $1 $4) $2 $4 braces)
                         [mj AnnType $1,mj AnnEqual $3] }
 
            -- type family declarations
@@ -1093,14 +1093,14 @@ ty_decl :: { LTyClDecl GhcPs }
                 -- Note the use of type for the head; this allows
                 -- infix type constructors to be declared
                 {% amms (mkFamDecl (comb4 $1 $3 $4 $5) (snd $ unLoc $6) $3
-                                   (snd $ unLoc $4) (snd $ unLoc $5))
+                                   (snd $ unLoc $4) (snd $ unLoc $5) braces)
                         (mj AnnType $1:mj AnnFamily $2:(fst $ unLoc $4)
                            ++ (fst $ unLoc $5) ++ (fst $ unLoc $6)) }
 
           -- ordinary data type or newtype declaration
         | data_or_newtype capi_ctype tycl_hdr constrs maybe_derivings
                 {% amms (mkTyData (comb4 $1 $3 $4 $5) (snd $ unLoc $1) $2 $3
-                           Nothing (reverse (snd $ unLoc $4))
+                           Nothing (reverse (snd $ unLoc $4)) braces
                                    (fmap reverse $5))
                                    -- We need the location on tycl_hdr in case
                                    -- constrs and deriving are both empty
@@ -1112,7 +1112,7 @@ ty_decl :: { LTyClDecl GhcPs }
                  maybe_derivings
             {% amms (mkTyData (comb4 $1 $3 $5 $6) (snd $ unLoc $1) $2 $3
                             (snd $ unLoc $4) (snd $ unLoc $5)
-                            (fmap reverse $6) )
+                            (fmap reverse $6) braces)
                                    -- We need the location on tycl_hdr in case
                                    -- constrs and deriving are both empty
                     ((fst $ unLoc $1):(fst $ unLoc $4)++(fst $ unLoc $5)) }
@@ -1120,7 +1120,7 @@ ty_decl :: { LTyClDecl GhcPs }
           -- data/newtype family
         | 'data' 'family' type opt_datafam_kind_sig
                 {% amms (mkFamDecl (comb3 $1 $2 $4) DataFamily $3
-                                   (snd $ unLoc $4) Nothing)
+                                   (snd $ unLoc $4) Nothing braces)
                         (mj AnnData $1:mj AnnFamily $2:(fst $ unLoc $4)) }
 
 inst_decl :: { LInstDecl GhcPs }
@@ -1264,7 +1264,7 @@ at_decl_cls :: { LHsDecl GhcPs }
         :  -- data family declarations, with optional 'family' keyword
           'data' opt_family type opt_datafam_kind_sig
                 {% amms (liftM mkTyClD (mkFamDecl (comb3 $1 $3 $4) DataFamily $3
-                                                  (snd $ unLoc $4) Nothing))
+                                                  (snd $ unLoc $4) Nothing braces))
                         (mj AnnData $1:$2++(fst $ unLoc $4)) }
 
            -- type family declarations, with optional 'family' keyword
@@ -1273,13 +1273,13 @@ at_decl_cls :: { LHsDecl GhcPs }
                {% amms (liftM mkTyClD
                         (mkFamDecl (comb3 $1 $2 $3) OpenTypeFamily $2
                                    (fst . snd $ unLoc $3)
-                                   (snd . snd $ unLoc $3)))
+                                   (snd . snd $ unLoc $3) braces))
                        (mj AnnType $1:(fst $ unLoc $3)) }
         | 'type' 'family' type opt_at_kind_inj_sig
                {% amms (liftM mkTyClD
                         (mkFamDecl (comb3 $1 $3 $4) OpenTypeFamily $3
                                    (fst . snd $ unLoc $4)
-                                   (snd . snd $ unLoc $4)))
+                                   (snd . snd $ unLoc $4) braces))
                        (mj AnnType $1:mj AnnFamily $2:(fst $ unLoc $4)) }
 
            -- default type instances, with optional 'instance' keyword
@@ -2089,8 +2089,13 @@ tv_bndrs :: { [LHsTyVarBndr GhcPs] }
          | {- empty -}                  { [] }
 
 tv_bndr :: { LHsTyVarBndr GhcPs }
-        : tyvar                         { sL1 $1 (UserTyVar noExt $1) }
-        | '(' tyvar '::' kind ')'       {% ams (sLL $1 $>  (KindedTyVar noExt $2 $4))
+        : tyvar                         { sL1 $1 (UserTyVar noExt $1 TvbNoBraces) }
+        | '(' tyvar '::' kind ')'       {% ams (sLL $1 $> (KindedTyVar noExt $2 $4 TvbNoBraces))
+                                               [mop $1,mu AnnDcolon $3
+                                               ,mcp $5] }
+        | '{' tyvar '}'                 {% ams (sLL $1 $> (UserTyVar noExt $2 TvbHasBraces))
+                                               [moc $1,mcc $3] }
+        | '{' tyvar '::' kind '}'       {% ams (sLL $1 $> (KindedTyVar noExt $2 $4 TvbHasBraces))
                                                [mop $1,mu AnnDcolon $3
                                                ,mcp $5] }
 
